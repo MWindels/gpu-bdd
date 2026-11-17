@@ -11,3 +11,5 @@ cuda-host = { git = "https://github.com/NVIDIA/cuda-rust.git" }
 # Shared host-side runtime. It has to come from the same repository as
 # cuda-host, which depends on it; a crates.io copy is a second cuda-core.
 cuda-core = { git = "https://github.com/NVIDIA/cuda-rust.git" }
+
+bytemuck = { version = "1.25.2", features = ["derive"] }

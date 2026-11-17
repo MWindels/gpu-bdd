@@ -2,6 +2,10 @@ use cuda_core::{CudaContext, DeviceBuffer, LaunchConfig1D};
 use cuda_device::{DisjointSlice, kernel, launch_bounds, launch_contract, thread};
 use cuda_host::cuda_module;
 
+mod structures;
+
+use structures::bdd::{PropositionalTree};
+
 #[cuda_module]
 mod kernels {
     use super::*;
@@ -25,10 +29,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const N: usize = 1024;
     let a_host: Vec<f32> = (0..N).map(|i| i as f32).collect();
     let b_host: Vec<f32> = (0..N).map(|i| (i * 2) as f32).collect();
+    let pt_host: PropositionalTree  = PropositionalTree::from_expr("");
 
     let a_dev = DeviceBuffer::from_host(&stream, &a_host)?;
     let b_dev = DeviceBuffer::from_host(&stream, &b_host)?;
     let mut c_dev = DeviceBuffer::<f32>::zeroed(&stream, N)?;
+    let pt_dev = DeviceBuffer::<PropositionalTree>::from_host(&stream, &[pt_host])?;
 
     // SAFETY: this package owns the embedded device bundle produced for the
     // kernels module above.
