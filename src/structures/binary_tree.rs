@@ -1,60 +1,22 @@
 use std::ops::{Index, IndexMut};
+use std::mem::size_of;
 
 use cuda_core::DeviceCopy;
 use bytemuck::Zeroable;
 
-#[derive(Copy, Clone, Zeroable)]
-#[repr(C)]
-/// A binary heap node.  This type includes a valid all-zero variant
-/// (called "None") because the type must be zero-initializable for
-/// when it is copied from host to device.
-pub enum Node<I: DeviceCopy, L: DeviceCopy> {
-    None,
-    Internal(I),
-    Leaf(L),
-}
-
-// SAFETY: The Zeroable trait on Node ensures that there exists a
-// valid all-zero variant.  For Node the all-zero variant is the first
-// variant.  We've called it "None".  Furthermore, Node also implements
-// Copy and Clone, which are requirements of DeviceCopy.
-unsafe impl<I: DeviceCopy, L: DeviceCopy> DeviceCopy for Node<I, L> {}
-
-
-/// A binary heap with contiguously-stored data.  Used to transfer
-/// data from host to device.  This type stores node data in a fixed-size
-/// array (implements Copy and Clone) so that it can be transferred to the
-/// device.
-#[derive(Copy, Clone, DeviceCopy)]
-pub struct BinaryHeap<I: DeviceCopy, L: DeviceCopy, const N: usize> {
-    heap: [Node<I, L>; N],
-}
-
-impl<I: DeviceCopy, L: DeviceCopy, const N: usize> Index<usize> for BinaryHeap<I, L, N> {
-    type Output = Node<I, L>;
-
-    fn index(self: &Self, idx: usize) -> &Self::Output {
-        &self.heap[idx]
-    }
-}
-
-impl<I: DeviceCopy, L: DeviceCopy, const N: usize> IndexMut<usize> for BinaryHeap<I, L, N> {
-    fn index_mut(self: &mut Self, idx: usize) -> &mut Self::Output {
-        &mut self.heap[idx]
-    }
-}
-
-impl<I: DeviceCopy, L: DeviceCopy, const N: usize> BinaryHeap<I, L, N> {
+/// The basis of all binary heaps.  Includes some common functionality and
+/// declarations of a number of functions which must be implemented by types
+/// implementing this trait.  Does not handle access or mutation.
+pub trait BinaryHeap<P: Zeroable + DeviceCopy, const N: usize>: Copy + Clone + DeviceCopy {
     /// Initializes an empty binary heap.
-    pub fn new() -> Self {
-        Self {
-            heap: [Node::<I, L>::None; N],
-        }
-    }
+    fn new() -> Self;
+
+    /// Returns the capacity of the heap.
+    fn cap() -> usize;
 
     /// Returns the parent index of the given index if it has a parent.
-    pub fn parent(self: &Self, idx: usize) -> Option<usize> {
-        if 0 < idx && idx < N {
+    fn parent(self: &Self, idx: usize) -> Option<usize> {
+        if 0 < idx && idx < Self::cap() {
             Some((idx - 1) / 2)
         } else {
             None
@@ -62,10 +24,10 @@ impl<I: DeviceCopy, L: DeviceCopy, const N: usize> BinaryHeap<I, L, N> {
     }
 
     /// Returns the index of the left child of the given index if it exists.
-    pub fn left(self: &Self, idx: usize) -> Option<usize> {
+    fn left(self: &Self, idx: usize) -> Option<usize> {
         let left_idx = 2 * idx + 1;
 
-        if 0 <= idx && left_idx < N {
+        if left_idx < Self::cap() {
             Some(left_idx)
         } else {
             None
@@ -73,14 +35,109 @@ impl<I: DeviceCopy, L: DeviceCopy, const N: usize> BinaryHeap<I, L, N> {
     }
 
     /// Returns the index of the right child of the given index if it exists.
-    pub fn right(self: &Self, idx: usize) -> Option<usize> {
+    fn right(self: &Self, idx: usize) -> Option<usize> {
         let right_idx = 2 * idx + 2;
 
-        if 0 <= idx && right_idx < N {
+        if right_idx < Self::cap() {
             Some(right_idx)
         } else {
             None
         }
+    }
+}
+
+/// A binary heap with contiguously-stored data.  Used to transfer
+/// data from host to device.  This type stores node data in a fixed-size
+/// array where each element is its own node in the heap.
+#[derive(Copy, Clone, DeviceCopy)]
+pub struct UnitBinaryHeap<P: Zeroable + DeviceCopy, const N: usize> {
+    heap: [P; N],
+}
+
+impl<P: Zeroable + DeviceCopy, const N: usize> BinaryHeap<P, N> for UnitBinaryHeap<P, N> {
+    fn new() -> Self {
+        Self {
+            heap: [P::zeroed(); N],
+        }
+    }
+
+    fn cap() -> usize {
+        N
+    }
+}
+
+impl<P: Zeroable + DeviceCopy, const N: usize> Index<usize> for UnitBinaryHeap<P, N> {
+    type Output = P;
+
+    fn index(self: &Self, idx: usize) -> &Self::Output {
+        &self.heap[idx]
+    }
+}
+
+impl<P: Zeroable + DeviceCopy, const N: usize> IndexMut<usize> for UnitBinaryHeap<P, N> {
+    fn index_mut(self: &mut Self, idx: usize) -> &mut Self::Output {
+        &mut self.heap[idx]
+    }
+}
+
+/// The type used in tightly-packed binary heaps.
+pub type PackedNode = u32;
+
+/// A binary heap implementation which stores small data by packing them into
+/// an array of bitfields.  Can be passed from host to device if necessary.
+/// For safety's sake, access and mutation must be done by value using the
+/// `get(...)` and `set(...)` functions.
+#[derive(Copy, Clone, DeviceCopy)]
+pub struct PackedBinaryHeap<const N: usize, const BITS: usize> {
+    heap: [PackedNode; N],
+}
+
+impl<const N: usize, const BITS: usize> BinaryHeap<PackedNode, N> for PackedBinaryHeap<N, BITS> {
+    fn new() -> Self {
+        Self {
+            heap: [0; N],
+        }
+    }
+
+    fn cap() -> usize {
+        const{Self::elements_per_node() * N}
+    }
+}
+
+impl<const N: usize, const BITS: usize> PackedBinaryHeap<N, BITS> {
+    const _ASSERT: () = {
+        debug_assert!(
+            size_of::<PackedNode>() % BITS == 0,
+            "the number of bits per packed node does not evenly divide the "
+        );
+    };
+
+    /// Returns the number of packed elements in each node.
+    const fn elements_per_node() -> usize {
+        (8 * size_of::<PackedNode>()) / BITS
+    }
+
+    /// Returns a triplet containing (1) the index of the bitfield that contains the value
+    /// at `idx`, (2) the mask to apply to extract the packed value, and (3) the offset to
+    /// use to recover the packed value after masking the bitfield.
+    fn access(self: &Self, idx: usize) -> (usize, PackedNode, usize) {
+        (
+            idx / Self::elements_per_node(),
+            ((1 as PackedNode) << BITS) - 1,
+            idx % Self::elements_per_node(),
+        )
+    }
+
+    /// Unpacks the value at `idx` and returns it by value.
+    pub fn get(self: &Self, idx: usize) -> PackedNode {
+        let (packed_idx, mask, offset) = self.access(idx);
+        (self.heap[packed_idx] & (mask << offset)) >> offset
+    }
+
+    /// Packs and sets the value at `idx` by value.
+    pub fn set(self: &mut Self, idx: usize, value: PackedNode) {
+        let (packed_idx, mask, offset) = self.access(idx);
+        self.heap[packed_idx] = (self.heap[packed_idx] & !(mask << offset)) ^ ((value & mask) << offset);
     }
 }
 
