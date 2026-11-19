@@ -1,8 +1,6 @@
 use std::mem::size_of;
 
-use cuda_core::DeviceCopy;
-
-use super::binary_tree::{BinaryHeap, UnitBinaryHeap, PackedNode, PackedBinaryHeap};
+use super::binary_tree::{BinaryHeap, UnitBinaryHeap};
 
 type PropTreeNode = u8;
 
@@ -25,8 +23,8 @@ const TRUE: PropTreeNode = 4;
 /// Prop-tree variables start at this index.
 const VARIABLE: PropTreeNode = 5;
 
-const MAX_VARIABLE_OCCURRENCES: usize = (PAYLOAD - VARIABLE) as usize;
-const MAX_PROP_TREE_SIZE: usize = 2 * MAX_VARIABLE_OCCURRENCES;
+pub const MAX_VARIABLE_OCCURRENCES: usize = (PAYLOAD - VARIABLE) as usize;
+pub const MAX_PROP_TREE_SIZE: usize = 2 * MAX_VARIABLE_OCCURRENCES;
 
 /// TODO
 pub type PropositionalTree = UnitBinaryHeap<PropTreeNode, MAX_PROP_TREE_SIZE>;
@@ -59,17 +57,4 @@ impl PropositionalTree {
             Some(())
         }().unwrap();
     }
-}
-
-const UNIT_COFACTOR_BYTES: usize = size_of::<PackedNode>();
-
-const COFACTOR_NODE_BITS: usize = 2;
-const COFACTOR_NODES_PER_BYTE: usize = 8 / COFACTOR_NODE_BITS;
-const COFACTOR_UNITS: usize = MAX_PROP_TREE_SIZE.div_ceil(COFACTOR_NODES_PER_BYTE * UNIT_COFACTOR_BYTES);
-
-type Cofactor = PackedBinaryHeap<COFACTOR_UNITS, COFACTOR_NODE_BITS>;
-
-impl Cofactor {
-    // TODO: prop-tree ascent
-    // TODO: branch ascent
 }

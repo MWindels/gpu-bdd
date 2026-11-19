@@ -81,7 +81,9 @@ impl<P: Zeroable + DeviceCopy, const N: usize> IndexMut<usize> for UnitBinaryHea
 }
 
 /// The type used in tightly-packed binary heaps.
-pub type PackedNode = u32;
+pub type PackedElement = u32;
+
+pub const PACKED_ELEMENT_BITS: usize = 8 * size_of::<PackedElement>();
 
 /// A binary heap implementation which stores small data by packing them into
 /// an array of bitfields.  Can be passed from host to device if necessary.
@@ -89,10 +91,10 @@ pub type PackedNode = u32;
 /// `get(...)` and `set(...)` functions.
 #[derive(Copy, Clone, DeviceCopy)]
 pub struct PackedBinaryHeap<const N: usize, const BITS: usize> {
-    heap: [PackedNode; N],
+    pub(super) heap: [PackedElement; N],
 }
 
-impl<const N: usize, const BITS: usize> BinaryHeap<PackedNode, N> for PackedBinaryHeap<N, BITS> {
+impl<const N: usize, const BITS: usize> BinaryHeap<PackedElement, N> for PackedBinaryHeap<N, BITS> {
     fn new() -> Self {
         Self {
             heap: [0; N],
@@ -100,42 +102,42 @@ impl<const N: usize, const BITS: usize> BinaryHeap<PackedNode, N> for PackedBina
     }
 
     fn cap() -> usize {
-        const{Self::elements_per_node() * N}
+        const{Self::nodes_per_element() * N}
     }
 }
 
 impl<const N: usize, const BITS: usize> PackedBinaryHeap<N, BITS> {
     const _ASSERT: () = {
         debug_assert!(
-            size_of::<PackedNode>() % BITS == 0,
-            "the number of bits per packed node does not evenly divide the "
+            size_of::<PackedElement>() % BITS == 0,
+            "the number of bits per node does not evenly divide the size of the heap's unit element"
         );
     };
 
-    /// Returns the number of packed elements in each node.
-    const fn elements_per_node() -> usize {
-        (8 * size_of::<PackedNode>()) / BITS
+    /// Returns the number of packed nodes in each heap element.
+    pub(super) const fn nodes_per_element() -> usize {
+        PACKED_ELEMENT_BITS / BITS
     }
 
     /// Returns a triplet containing (1) the index of the bitfield that contains the value
     /// at `idx`, (2) the mask to apply to extract the packed value, and (3) the offset to
     /// use to recover the packed value after masking the bitfield.
-    fn access(self: &Self, idx: usize) -> (usize, PackedNode, usize) {
+    fn access(self: &Self, idx: usize) -> (usize, PackedElement, usize) {
         (
-            idx / Self::elements_per_node(),
-            ((1 as PackedNode) << BITS) - 1,
-            idx % Self::elements_per_node(),
+            idx / Self::nodes_per_element(),
+            ((1 as PackedElement) << BITS) - 1,
+            idx % Self::nodes_per_element(),
         )
     }
 
     /// Unpacks the value at `idx` and returns it by value.
-    pub fn get(self: &Self, idx: usize) -> PackedNode {
+    pub fn get(self: &Self, idx: usize) -> PackedElement {
         let (packed_idx, mask, offset) = self.access(idx);
         (self.heap[packed_idx] & (mask << offset)) >> offset
     }
 
     /// Packs and sets the value at `idx` by value.
-    pub fn set(self: &mut Self, idx: usize, value: PackedNode) {
+    pub fn set(self: &mut Self, idx: usize, value: PackedElement) {
         let (packed_idx, mask, offset) = self.access(idx);
         self.heap[packed_idx] = (self.heap[packed_idx] & !(mask << offset)) ^ ((value & mask) << offset);
     }
