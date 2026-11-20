@@ -107,20 +107,20 @@ const fn array_shift_constants(offset: usize) -> (usize, u32, usize) {
 /// an array, treating them as a single contiguous value.  The
 /// result is returned by overwriting `a`.
 fn array_down_shift(a: &mut CofactorArray, offset: usize) {
-    let (units_to_shift, bits_to_shift, remaining_units) = array_shift_constants(offset);
+    let (elems_to_shift, bits_to_shift, remaining_elems) = array_shift_constants(offset);
     let remaining_bit_mask: PackedElement = (1 << bits_to_shift) - 1;
 
-    if remaining_units > 0 {
-        a[0] = a[units_to_shift].unbounded_shr(bits_to_shift);
+    if remaining_elems > 0 {
+        a[0] = a[elems_to_shift].unbounded_shr(bits_to_shift);
     }
 
-    for i in 1..remaining_units {
+    for i in 1..remaining_elems {
         // The cast on PACKED_ELEMENT_BITS is truncating, but I don't expect it to ever be big enough for that to matter.
-        a[i - 1] |= (a[units_to_shift + i] & remaining_bit_mask).unbounded_shl((PACKED_ELEMENT_BITS as u32) - bits_to_shift);
-        a[i] = a[units_to_shift + i].unbounded_shr(bits_to_shift);
+        a[i - 1] |= (a[elems_to_shift + i] & remaining_bit_mask).unbounded_shl((PACKED_ELEMENT_BITS as u32) - bits_to_shift);
+        a[i] = a[elems_to_shift + i].unbounded_shr(bits_to_shift);
     }
 
-    for i in remaining_units..COFACTOR_ELEMENTS {
+    for i in remaining_elems..COFACTOR_ELEMENTS {
         a[i] = 0;
     }
 }
@@ -129,20 +129,20 @@ fn array_down_shift(a: &mut CofactorArray, offset: usize) {
 /// an array, treating them as a single contiguous value.  The
 /// result is returned by overwriting `a`.
 fn array_up_shift(a: &mut CofactorArray, offset: usize) {
-    let (units_to_shift, bits_to_shift, remaining_units) = array_shift_constants(offset);
+    let (elems_to_shift, bits_to_shift, remaining_elems) = array_shift_constants(offset);
     let remaining_bit_mask: PackedElement = !((!(0 as PackedElement)).unbounded_shr(bits_to_shift));
 
-    if remaining_units > 0 {
-        a[COFACTOR_ELEMENTS - 1] = a[remaining_units - 1].unbounded_shl(bits_to_shift);
+    if remaining_elems > 0 {
+        a[COFACTOR_ELEMENTS - 1] = a[remaining_elems - 1].unbounded_shl(bits_to_shift);
     }
 
-    for i in (units_to_shift..(COFACTOR_ELEMENTS - 1)).rev() {
+    for i in (elems_to_shift..(COFACTOR_ELEMENTS - 1)).rev() {
         // Truncating cast on PACKED_ELEMENT_BITS doesn't matter, see note in array_down_shift.
-        a[i + 1] |= (a[i - units_to_shift] & remaining_bit_mask).unbounded_shr((PACKED_ELEMENT_BITS as u32) - bits_to_shift);
-        a[i] = a[i - units_to_shift].unbounded_shl(bits_to_shift);
+        a[i + 1] |= (a[i - elems_to_shift] & remaining_bit_mask).unbounded_shr((PACKED_ELEMENT_BITS as u32) - bits_to_shift);
+        a[i] = a[i - elems_to_shift].unbounded_shl(bits_to_shift);
     }
 
-    for i in 0..units_to_shift {
+    for i in 0..elems_to_shift {
         a[i] = 0;
     }
 }
