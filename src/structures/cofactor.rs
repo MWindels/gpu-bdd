@@ -18,15 +18,15 @@ macro_rules! cofactor_array {
 
 /// Computes the result of repeating a one-byte pattern across a packed element.
 const fn repeating_byte(pattern: u8) -> PackedElement {
-    let mut unit: PackedElement = 0;
+    let mut element: PackedElement = 0;
 
     let mut byte = 0;
     while byte < size_of::<PackedElement>() {
-        unit = (unit << 8) | (pattern as PackedElement);
+        element = (element << 8) | (pattern as PackedElement);
         byte += 1;
     }
 
-    unit
+    element
 }
 
 /// Applies a unary operation to every element in array `a`.
@@ -91,51 +91,60 @@ fn array_xor_repeating(a: &mut CofactorArray, b: PackedElement) {
 */
 
 /// Returns constants relevant to bit shifting a whole array.
-const fn array_shift_constants(offset: usize) -> (usize, usize, usize) {
-    let units_to_shift = offset / PACKED_ELEMENT_BITS;
-    let bits_to_shift = offset % PACKED_ELEMENT_BITS;
+const fn array_shift_constants(offset: usize) -> (usize, u32, usize) {
+    // Note: The unbounded_sh* functions require a u32 rhs.
+    let elems_to_shift: usize = offset / PACKED_ELEMENT_BITS;
+    let bits_to_shift: u32 = (offset % PACKED_ELEMENT_BITS) as u32;
 
-    (units_to_shift, bits_to_shift, COFACTOR_ELEMENTS - units_to_shift)
+    (
+        if elems_to_shift < COFACTOR_ELEMENTS {elems_to_shift} else {COFACTOR_ELEMENTS},
+        bits_to_shift,
+        COFACTOR_ELEMENTS.saturating_sub(elems_to_shift)
+    )
 }
 
-/// Performs a right shift on the elements of an array, treating them
-/// as a single contiguous value.  The result is returned in a new array.
-fn array_down_shift(a: &CofactorArray, offset: usize) -> CofactorArray {
-    let mut result: CofactorArray = cofactor_array!(0);
-
+/// Performs an in-place unbounded right shift on the elements of
+/// an array, treating them as a single contiguous value.  The
+/// result is returned by overwriting `a`.
+fn array_down_shift(a: &mut CofactorArray, offset: usize) {
     let (units_to_shift, bits_to_shift, remaining_units) = array_shift_constants(offset);
     let remaining_bit_mask: PackedElement = (1 << bits_to_shift) - 1;
 
     if remaining_units > 0 {
-        result[0] = a[units_to_shift] >> bits_to_shift;
-
-        for i in 1..remaining_units {
-            result[i - 1] |= (a[units_to_shift + i] & remaining_bit_mask) << (PACKED_ELEMENT_BITS - bits_to_shift);
-            result[i] = a[units_to_shift + i] >> bits_to_shift;
-        }
+        a[0] = a[units_to_shift].unbounded_shr(bits_to_shift);
     }
 
-    result
+    for i in 1..remaining_units {
+        // The cast on PACKED_ELEMENT_BITS is truncating, but I don't expect it to ever be big enough for that to matter.
+        a[i - 1] |= (a[units_to_shift + i] & remaining_bit_mask).unbounded_shl((PACKED_ELEMENT_BITS as u32) - bits_to_shift);
+        a[i] = a[units_to_shift + i].unbounded_shr(bits_to_shift);
+    }
+
+    for i in remaining_units..COFACTOR_ELEMENTS {
+        a[i] = 0;
+    }
 }
 
-/// Performs a left shift on the elements of an array, treating them
-/// as a single contiguous value.  The result is returned in a new array.
-fn array_up_shift(a: &CofactorArray, offset: usize) -> CofactorArray {
-    let mut result: CofactorArray = cofactor_array!(0);
-
+/// Performs an in-place unbounded left shift on the elements of
+/// an array, treating them as a single contiguous value.  The
+/// result is returned by overwriting `a`.
+fn array_up_shift(a: &mut CofactorArray, offset: usize) {
     let (units_to_shift, bits_to_shift, remaining_units) = array_shift_constants(offset);
-    let remaining_bit_mask: PackedElement = !(!0 >> bits_to_shift);
+    let remaining_bit_mask: PackedElement = !((!(0 as PackedElement)).unbounded_shr(bits_to_shift));
 
     if remaining_units > 0 {
-        result[COFACTOR_ELEMENTS - 1] = a[remaining_units - 1] << bits_to_shift;
-
-        for i in (units_to_shift..(COFACTOR_ELEMENTS - 1)).rev() {
-            result[i + 1] |= (a[i - units_to_shift] & remaining_bit_mask) >> (PACKED_ELEMENT_BITS - bits_to_shift);
-            result[i] = a[i - units_to_shift] << bits_to_shift;
-        }
+        a[COFACTOR_ELEMENTS - 1] = a[remaining_units - 1].unbounded_shl(bits_to_shift);
     }
 
-    result
+    for i in (units_to_shift..(COFACTOR_ELEMENTS - 1)).rev() {
+        // Truncating cast on PACKED_ELEMENT_BITS doesn't matter, see note in array_down_shift.
+        a[i + 1] |= (a[i - units_to_shift] & remaining_bit_mask).unbounded_shr((PACKED_ELEMENT_BITS as u32) - bits_to_shift);
+        a[i] = a[i - units_to_shift].unbounded_shl(bits_to_shift);
+    }
+
+    for i in 0..units_to_shift {
+        a[i] = 0;
+    }
 }
 
 impl Cofactor {
@@ -178,7 +187,7 @@ impl Cofactor {
 
         // Copy the extracted low bits and move them to the high position.
         array_overwrite(&mut copy_bits, &low_bits);
-        array_up_shift(&copy_bits, 1);
+        array_up_shift(&mut copy_bits, 1);
 
         // Join the original low bits with the up-shifted copy.
         array_or(&mut low_bits, &copy_bits);
@@ -228,9 +237,13 @@ mod tests {
         let mut result = cofactor_array!(repeating_byte(0xFF));
         const LAST_ELEMENT: usize = COFACTOR_ELEMENTS - 1;
 
+        // Test 0-bit upshift.
+        array_up_shift(&mut result, 0);
+        assert_eq!(result, cofactor_array!(repeating_byte(0xFF)));
+
         // Test single-bit upshift.
         array_up_shift(&mut result, 1);
-        assert_eq!(result[0], repeating_byte(0xFF) << 1);
+        assert_eq!(result[0], repeating_byte(0xFF).unbounded_shl(1));
         assert_eq!(result[1..], cofactor_array!(repeating_byte(0xFF))[1..]);
         result[0] = repeating_byte(0xFF);
 
@@ -250,6 +263,16 @@ mod tests {
         array_up_shift(&mut result, PACKED_ELEMENT_BITS * COFACTOR_ELEMENTS - 1);
         assert_eq!(result[LAST_ELEMENT], 1 << (PACKED_ELEMENT_BITS - 1));
         assert_eq!(result[..LAST_ELEMENT], cofactor_array!(0)[..LAST_ELEMENT]);
+        result = cofactor_array!(repeating_byte(0xFF));
+
+        // Test full upshift.
+        array_up_shift(&mut result, PACKED_ELEMENT_BITS * COFACTOR_ELEMENTS);
+        assert_eq!(result, cofactor_array!(0));
+        result = cofactor_array!(repeating_byte(0xFF));
+
+        // Test excessive upshift.
+        array_up_shift(&mut result, PACKED_ELEMENT_BITS * (COFACTOR_ELEMENTS + 1) + PACKED_ELEMENT_BITS / 2);
+        assert_eq!(result, cofactor_array!(0));
     }
 
     #[test]
@@ -257,9 +280,13 @@ mod tests {
         let mut result = cofactor_array!(repeating_byte(0xFF));
         const LAST_ELEMENT: usize = COFACTOR_ELEMENTS - 1;
 
+        // Test 0-bit downshift.
+        array_down_shift(&mut result, 0);
+        assert_eq!(result, cofactor_array!(repeating_byte(0xFF)));
+
         // Test single-bit downshift.
         array_down_shift(&mut result, 1);
-        assert_eq!(result[LAST_ELEMENT], repeating_byte(0xFF) >> 1);
+        assert_eq!(result[LAST_ELEMENT], repeating_byte(0xFF).unbounded_shr(1));
         assert_eq!(result[..LAST_ELEMENT], cofactor_array!(repeating_byte(0xFF))[..LAST_ELEMENT]);
         result[LAST_ELEMENT] = repeating_byte(0xFF);
 
@@ -279,5 +306,15 @@ mod tests {
         array_down_shift(&mut result, PACKED_ELEMENT_BITS * COFACTOR_ELEMENTS - 1);
         assert_eq!(result[0], 1);
         assert_eq!(result[1..], cofactor_array!(0)[1..]);
+        result = cofactor_array!(repeating_byte(0xFF));
+
+        // Test full downshift.
+        array_down_shift(&mut result, PACKED_ELEMENT_BITS * COFACTOR_ELEMENTS);
+        assert_eq!(result, cofactor_array!(0));
+        result = cofactor_array!(repeating_byte(0xFF));
+
+        // Test excessive downshift.
+        array_down_shift(&mut result, PACKED_ELEMENT_BITS * (COFACTOR_ELEMENTS + 1) + PACKED_ELEMENT_BITS / 2);
+        assert_eq!(result, cofactor_array!(0));
     }
 }
